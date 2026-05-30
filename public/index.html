@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Video Asset Fetcher</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 40px; max-width: 1400px; margin: 0 auto; color: #333; }
+    h1 { font-size: 24px; font-weight: 600; margin: 0 0 24px; }
+    .input-row { display: flex; gap: 8px; margin-bottom: 24px; }
+    input[type="text"] { flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; outline: none; }
+    input[type="text"]:focus { border-color: #0070f3; }
+    button.primary { padding: 8px 16px; background: #0070f3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; white-space: nowrap; }
+    button.primary:hover { background: #0051bb; }
+    button.primary:disabled { background: #93c5fd; cursor: not-allowed; }
+    .video-info { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 28px; padding: 16px; background: #f9f9f9; border-radius: 8px; }
+    .video-info img { width: 160px; border-radius: 4px; flex-shrink: 0; }
+    .video-info .meta h2 { margin: 0 0 6px; font-size: 18px; }
+    .video-info .meta p { margin: 0 0 4px; color: #666; font-size: 14px; }
+    .section-title { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 32px; }
+    th { text-align: left; padding: 8px 12px; background: #f0f0f0; border-bottom: 2px solid #ddd; font-weight: 600; white-space: nowrap; }
+    td { padding: 8px 12px; border-bottom: 1px solid #eee; vertical-align: middle; }
+    td.url-cell { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #555; font-family: monospace; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .badge-combined { background: #d1fae5; color: #065f46; }
+    .badge-video { background: #dbeafe; color: #1e40af; }
+    .badge-audio { background: #fef3c7; color: #92400e; }
+    button.copy-btn { padding: 4px 12px; background: white; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    button.copy-btn:hover { background: #f5f5f5; }
+    button.copy-btn.copied { background: #d1fae5; border-color: #6ee7b7; color: #065f46; }
+    a.open-btn { padding: 4px 12px; background: #0070f3; color: white; border-radius: 4px; font-size: 13px; text-decoration: none; display: inline-block; }
+    a.open-btn:hover { background: #0051bb; }
+    .transcript-row { display: flex; gap: 10px; margin-bottom: 24px; }
+    .error { color: #dc2626; padding: 12px 16px; background: #fef2f2; border-radius: 4px; margin-bottom: 16px; font-size: 14px; }
+    .loading-row td { color: #888; font-style: italic; }
+    #transcript-section, #formats-section, #video-info, #error { display: none; }
+  </style>
+</head>
+<body>
+
+  <h1>YouTube Video Asset Fetcher</h1>
+
+  <div class="input-row">
+    <input type="text" id="url-input" placeholder="Paste YouTube URL or video ID" />
+    <button class="primary" id="fetch-btn" onclick="fetchAll()">Get Assets</button>
+  </div>
+
+  <div id="error" class="error"></div>
+
+  <div id="video-info" class="video-info">
+    <img id="thumb" src="" alt="thumbnail" />
+    <div class="meta">
+      <h2 id="vid-title"></h2>
+      <p id="vid-channel"></p>
+      <p id="vid-duration"></p>
+    </div>
+  </div>
+
+  <div id="formats-section">
+    <p class="section-title">Formats</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Quality</th>
+          <th>Container</th>
+          <th>Size</th>
+          <th>URL</th>
+          <th>Copy URL</th>
+          <th>Open</th>
+        </tr>
+      </thead>
+      <tbody id="formats-body"></tbody>
+    </table>
+  </div>
+
+  <div id="transcript-section">
+    <p class="section-title">Transcript</p>
+    <div class="transcript-row">
+      <button class="primary" onclick="downloadTranscript('txt')">Download .txt</button>
+      <button class="primary" onclick="downloadTranscript('srt')">Download .srt</button>
+    </div>
+  </div>
+
+  <script>
+    let formats = [];
+    let transcriptData = null;
+    let videoTitle = 'transcript';
+
+    document.getElementById('url-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') fetchAll();
+    });
+
+    async function fetchAll() {
+      const url = document.getElementById('url-input').value.trim();
+      if (!url) return;
+
+      const btn = document.getElementById('fetch-btn');
+      btn.disabled = true;
+      btn.textContent = 'Fetching…';
+
+      document.getElementById('error').style.display = 'none';
+      document.getElementById('video-info').style.display = 'none';
+      document.getElementById('formats-section').style.display = 'none';
+      document.getElementById('transcript-section').style.display = 'none';
+      transcriptData = null;
+      formats = [];
+
+      document.getElementById('formats-body').innerHTML =
+        '<tr class="loading-row"><td colspan="7">Fetching formats…</td></tr>';
+      document.getElementById('formats-section').style.display = 'block';
+
+      const [videoRes, transcriptRes] = await Promise.allSettled([
+        fetch('/api/video?url=' + encodeURIComponent(url)),
+        fetch('/api/transcript?url=' + encodeURIComponent(url))
+      ]);
+
+      btn.disabled = false;
+      btn.textContent = 'Get Assets';
+
+      // Video
+      if (videoRes.status === 'fulfilled' && videoRes.value.ok) {
+        const data = await videoRes.value.json();
+        videoTitle = data.title;
+        formats = data.formats;
+
+        document.getElementById('thumb').src = data.thumbnail;
+        document.getElementById('vid-title').textContent = data.title;
+        document.getElementById('vid-channel').textContent = data.channel;
+        document.getElementById('vid-duration').textContent = formatDuration(data.duration);
+        document.getElementById('video-info').style.display = 'flex';
+
+        const tbody = document.getElementById('formats-body');
+        tbody.innerHTML = '';
+        data.formats.forEach((f, i) => {
+          const badgeClass = f.type === 'Combined' ? 'badge-combined'
+                           : f.type === 'Video only' ? 'badge-video'
+                           : 'badge-audio';
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><span class="badge ${badgeClass}">${f.type}</span></td>
+            <td>${f.quality}</td>
+            <td>${f.container}</td>
+            <td>${f.size}</td>
+            <td class="url-cell" title="${escAttr(f.url)}">${escHtml(f.url)}</td>
+            <td><button class="copy-btn" id="copy-${i}" onclick="copyURL(${i})">Copy URL</button></td>
+            <td><a class="open-btn" href="${escAttr(f.url)}" target="_blank" rel="noreferrer">Open</a></td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } else {
+        let errMsg = 'Failed to fetch video info.';
+        if (videoRes.status === 'fulfilled') {
+          try { const j = await videoRes.value.json(); errMsg = j.error || errMsg; } catch {}
+        }
+        document.getElementById('error').textContent = errMsg;
+        document.getElementById('error').style.display = 'block';
+        document.getElementById('formats-section').style.display = 'none';
+      }
+
+      // Transcript (silent fail if unavailable)
+      if (transcriptRes.status === 'fulfilled' && transcriptRes.value.ok) {
+        const data = await transcriptRes.value.json();
+        if (data.transcript && data.transcript.length) {
+          transcriptData = data.transcript;
+          document.getElementById('transcript-section').style.display = 'block';
+        }
+      }
+    }
+
+    function copyURL(i) {
+      navigator.clipboard.writeText(formats[i].url).then(() => {
+        const btn = document.getElementById('copy-' + i);
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy URL';
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    function formatDuration(s) {
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+    }
+
+    function pad(n) { return String(n).padStart(2, '0'); }
+
+    function escAttr(s) { return s.replace(/"/g, '&quot;'); }
+    function escHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+    function downloadTranscript(format) {
+      if (!transcriptData) return;
+      let content, ext, mime;
+
+      if (format === 'txt') {
+        content = transcriptData.map(t => t.text).join('\n');
+        ext = 'txt'; mime = 'text/plain';
+      } else {
+        content = transcriptData.map((t, i) => {
+          const start = msToSRT(t.offset);
+          const end = msToSRT(t.offset + t.duration);
+          return `${i + 1}\n${start} --> ${end}\n${t.text}\n`;
+        }).join('\n');
+        ext = 'srt'; mime = 'text/srt';
+      }
+
+      const safe = videoTitle.replace(/[/\\?%*:|"<>]/g, '-');
+      const blob = new Blob([content], { type: mime });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${safe}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    function msToSRT(ms) {
+      const total = Math.floor(ms / 1000);
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      const mill = Math.floor(ms % 1000);
+      return `${pad(h)}:${pad(m)}:${pad(s)},${String(mill).padStart(3, '0')}`;
+    }
+  </script>
+
+</body>
+</html>
