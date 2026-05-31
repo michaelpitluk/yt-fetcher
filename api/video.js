@@ -27,7 +27,7 @@ module.exports = async (req, res) => {
 
   try {
     const { Innertube } = await import('youtubei.js');
-    const yt = await Innertube.create({ cache: null, generate_session_locally: true });
+    const yt = await Innertube.create({ cache: null });
 
     let videoId = url.trim();
     const match = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([^&?/\s]{11})/);
