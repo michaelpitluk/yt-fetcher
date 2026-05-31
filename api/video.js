@@ -8,6 +8,14 @@ function formatBytes(bytes) {
   return parseFloat((b / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+function getUrl(format, player) {
+  if (format.url) return format.url;
+  if (format.decipher && player) {
+    try { return format.decipher(player); } catch {}
+  }
+  return null;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -21,12 +29,13 @@ module.exports = async (req, res) => {
     const { Innertube } = await import('youtubei.js');
     const yt = await Innertube.create({ cache: null, generate_session_locally: true });
 
-    let videoId = url;
+    let videoId = url.trim();
     const match = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([^&?/\s]{11})/);
     if (match) videoId = match[1];
 
     const info = await yt.getInfo(videoId);
     const details = info.basic_info;
+    const player = yt.session.player;
 
     const combined = (info.streaming_data?.formats || []).map(f => ({
       itag: f.itag,
@@ -34,7 +43,7 @@ module.exports = async (req, res) => {
       type: 'Combined',
       container: f.mime_type?.split(';')[0]?.split('/')[1] || 'N/A',
       size: formatBytes(f.content_length),
-      url: f.url
+      url: getUrl(f, player)
     }));
 
     const adaptive = (info.streaming_data?.adaptive_formats || []).map(f => {
@@ -45,17 +54,21 @@ module.exports = async (req, res) => {
         type: isVideo ? 'Video only' : 'Audio only',
         container: f.mime_type?.split(';')[0]?.split('/')[1] || 'N/A',
         size: formatBytes(f.content_length),
-        url: f.url
+        url: getUrl(f, player)
       };
     });
 
     const formats = [...combined, ...adaptive].filter(f => f.url);
 
+    const duration = parseInt(details.duration) || 0;
+    const thumbnail = details.thumbnail?.[0]?.url
+      || `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+
     res.json({
-      title: details.title,
-      channel: details.author,
-      duration: details.duration,
-      thumbnail: details.thumbnail?.[0]?.url,
+      title: details.title || 'Unknown',
+      channel: details.author || 'Unknown',
+      duration,
+      thumbnail,
       formats
     });
   } catch (e) {
