@@ -8,12 +8,43 @@ function formatBytes(bytes) {
   return parseFloat((b / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+async function fetchPlayer(videoId, clientName, clientVersion, extra = {}) {
+  const body = {
+    videoId,
+    context: {
+      client: { clientName, clientVersion, hl: 'en', timeZone: 'UTC', utcOffsetMinutes: 0, ...extra },
+    },
+  };
+
+  const headers = { 'Content-Type': 'application/json' };
+
+  if (clientName === 'ANDROID') {
+    headers['User-Agent'] = `com.google.android.youtube/${clientVersion} (Linux; U; Android 11) gzip`;
+    headers['X-YouTube-Client-Name'] = '3';
+    headers['X-YouTube-Client-Version'] = clientVersion;
+  } else if (clientName === 'IOS') {
+    headers['User-Agent'] = `com.google.ios.youtube/${clientVersion} (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)`;
+    headers['X-YouTube-Client-Name'] = '5';
+    headers['X-YouTube-Client-Version'] = clientVersion;
+  } else if (clientName === 'TVHTML5') {
+    headers['X-YouTube-Client-Name'] = '7';
+    headers['X-YouTube-Client-Version'] = clientVersion;
+  }
+
+  const url = clientName === 'ANDROID'
+    ? 'https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
+    : 'https://www.youtube.com/youtubei/v1/player';
+
+  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  return res.json();
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { url } = req.query;
+  const { url, debug } = req.query;
   if (!url) return res.status(400).json({ error: 'No URL provided' });
 
   let videoId = url.trim();
@@ -21,33 +52,39 @@ module.exports = async (req, res) => {
   if (match) videoId = match[1];
 
   try {
-    const playerRes = await fetch('https://www.youtube.com/youtubei/v1/player', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
-        'X-YouTube-Client-Name': '5',
-        'X-YouTube-Client-Version': '19.29.1',
-      },
-      body: JSON.stringify({
-        videoId,
-        context: {
-          client: {
-            clientName: 'IOS',
-            clientVersion: '19.29.1',
-            deviceModel: 'iPhone16,2',
-            hl: 'en',
-            timeZone: 'UTC',
-            utcOffsetMinutes: 0,
-          },
-        },
-      }),
-    });
+    // Try clients in order — Android returns pre-deciphered URLs and is most reliable
+    const clients = [
+      ['ANDROID', '17.31.35', { androidSdkVersion: 30 }],
+      ['IOS',     '19.29.1', { deviceModel: 'iPhone16,2' }],
+      ['TVHTML5', '2.0',     {}],
+    ];
 
-    const data = await playerRes.json();
+    let data = null;
+    let usedClient = null;
 
-    if (data.playabilityStatus?.status !== 'OK') {
-      return res.status(400).json({ error: data.playabilityStatus?.reason || 'Video not available' });
+    for (const [name, version, extra] of clients) {
+      const attempt = await fetchPlayer(videoId, name, version, extra);
+      if (debug) {
+        return res.json({ client: name, raw: attempt });
+      }
+      if (attempt.playabilityStatus?.status === 'OK') {
+        data = attempt;
+        usedClient = name;
+        break;
+      }
+    }
+
+    if (!data) {
+      // Return all three statuses so we can see what's happening
+      const results = {};
+      for (const [name, version, extra] of clients) {
+        const attempt = await fetchPlayer(videoId, name, version, extra);
+        results[name] = {
+          status: attempt.playabilityStatus?.status,
+          reason: attempt.playabilityStatus?.reason,
+        };
+      }
+      return res.status(400).json({ error: 'All clients failed', results });
     }
 
     const details = data.videoDetails;
@@ -87,6 +124,7 @@ module.exports = async (req, res) => {
       duration: parseInt(details.lengthSeconds) || 0,
       thumbnail,
       formats: [...combined, ...adaptive],
+      _client: usedClient,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
