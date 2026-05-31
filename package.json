@@ -2,7 +2,6 @@
   "name": "yt-fetcher",
   "version": "1.0.0",
   "dependencies": {
-    "youtubei.js": "^10.4.0",
     "youtube-transcript": "^1.2.1"
   }
 }
