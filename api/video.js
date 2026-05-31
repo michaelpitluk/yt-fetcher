@@ -31,9 +31,7 @@ async function fetchPlayer(videoId, clientName, clientVersion, extra = {}) {
     headers['X-YouTube-Client-Version'] = clientVersion;
   }
 
-  const url = clientName === 'ANDROID'
-    ? 'https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
-    : 'https://www.youtube.com/youtubei/v1/player';
+  const url = 'https://www.youtube.com/youtubei/v1/player';
 
   const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
   return res.json();
@@ -62,11 +60,25 @@ module.exports = async (req, res) => {
     let data = null;
     let usedClient = null;
 
+    if (debug) {
+      const results = {};
+      for (const [name, version, extra] of clients) {
+        const attempt = await fetchPlayer(videoId, name, version, extra);
+        results[name] = {
+          status: attempt.playabilityStatus?.status,
+          reason: attempt.playabilityStatus?.reason,
+          title: attempt.videoDetails?.title,
+          formatsCount: attempt.streamingData?.formats?.length || 0,
+          adaptiveCount: attempt.streamingData?.adaptiveFormats?.length || 0,
+          firstFormatHasUrl: !!attempt.streamingData?.formats?.[0]?.url,
+          error: attempt.error,
+        };
+      }
+      return res.json(results);
+    }
+
     for (const [name, version, extra] of clients) {
       const attempt = await fetchPlayer(videoId, name, version, extra);
-      if (debug) {
-        return res.json({ client: name, raw: attempt });
-      }
       if (attempt.playabilityStatus?.status === 'OK') {
         data = attempt;
         usedClient = name;
