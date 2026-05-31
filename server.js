@@ -1,10 +1,35 @@
 const express = require('express');
 const { execFile } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { YoutubeTranscript } = require('youtube-transcript');
 
 const app = express();
+
+// Basic Auth
+app.use((req, res, next) => {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Basic ')) {
+    res.set('WWW-Authenticate', 'Basic realm="YT Fetcher"');
+    return res.status(401).send('Unauthorized');
+  }
+  const [user, pass] = Buffer.from(auth.slice(6), 'base64').toString().split(':');
+  if (user === process.env.AUTH_USER && pass === process.env.AUTH_PASSWORD) {
+    return next();
+  }
+  res.set('WWW-Authenticate', 'Basic realm="YT Fetcher"');
+  return res.status(401).send('Unauthorized');
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Write cookies to disk once at startup
+const COOKIES_PATH = path.join(os.tmpdir(), 'yt-cookies.txt');
+if (process.env.YOUTUBE_COOKIES) {
+  fs.writeFileSync(COOKIES_PATH, process.env.YOUTUBE_COOKIES);
+  console.log('YouTube cookies loaded');
+}
 
 function formatBytes(bytes) {
   if (!bytes) return 'N/A';
@@ -20,7 +45,13 @@ app.get('/api/video', (req, res) => {
   const { url } = req.query;
   if (!url) return res.status(400).json({ error: 'No URL provided' });
 
-  const args = ['--dump-json', '--no-playlist', '--no-warnings', '--extractor-retries', '3', url];
+  const cookiesArgs = fs.existsSync(COOKIES_PATH) ? ['--cookies', COOKIES_PATH] : [];
+  const args = [
+    '--dump-json', '--no-playlist', '--no-warnings',
+    '--extractor-retries', '3',
+    ...cookiesArgs,
+    url
+  ];
 
   execFile('yt-dlp', args, { timeout: 30000 }, (err, stdout, stderr) => {
     if (err) return res.status(500).json({ error: stderr || err.message });
